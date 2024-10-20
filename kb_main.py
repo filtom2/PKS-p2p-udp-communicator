@@ -1,10 +1,17 @@
 import socket
 import threading
 
+# +---------+------------+-------------+--------+--------+-------+
+# | TYPE    | Frag. Nr   | Total Frags |  CRC   | Flags  | Data  |
+# +---------+------------+-------------+--------+--------+-------+
+# | 1 Byte  |  2 Byte    |   2 Byte    |  4 Byte| 1 Byte | var   |
+# +---------+------------+-------------+--------+--------+-------+
+
+
 def start_server(local_host='localhost', local_port=65432):
     """
     Starts the server to listen for incoming UDP messages.
-    """
+    """                       #   IPv4         UDP
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server_sock:
         try:
             server_sock.bind((local_host, local_port))
@@ -57,6 +64,7 @@ def start_server(local_host='localhost', local_port=65432):
             print("Server stopped communication.")
         except Exception as e:
             print(f"Server error: {e}")
+            
 
 def start_client(local_host='localhost', local_port=65433, server_host='localhost', server_port=65432):
     """
@@ -108,6 +116,7 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
         except Exception as e:
             print(f"Client error: {e}")
 
+
 def main():
     """
     Main function to choose between server and client modes with UDP bidirectional communication.
@@ -138,6 +147,7 @@ def main():
             break
         else:
             print("Invalid mode selected. Please choose 'server', 'client', or 'exit'.")
+
 
 if __name__ == "__main__":
     main()
