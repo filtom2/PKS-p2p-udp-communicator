@@ -8,10 +8,47 @@ import threading
 # +---------+------------+-------------+--------+--------+-------+
 
 
+MSG_DEFAULT = 0
+MSG_SYN = 1
+MSG_SYN_ACK = 2
+MSG_ACK = 3
+MSG_FIN = 4
+
+
+def create_message(msg_type, data=b''):
+    return bytes([msg_type]) + data
+
+def parse_message(message):
+    msg_type = message[0]
+    data = message[1:]
+    return msg_type, data
+
+# Server hs
+def handle_handshake_server(server_sock):
+    data, addr = server_sock.recvfrom(1024)
+    msg_type, _ = parse_message(data)
+    if msg_type == MSG_SYN:
+        server_sock.sendto(create_message(MSG_SYN_ACK), addr)
+        data, addr = server_sock.recvfrom(1024)
+        msg_type, _ = parse_message(data)
+        if msg_type == MSG_ACK:
+            print(f"Handshake complete with client at {addr}")
+            return addr
+    return None
+
+# Client hs
+def handle_handshake_client(client_sock, server_address):
+    client_sock.sendto(create_message(MSG_SYN), server_address)
+    data, addr = client_sock.recvfrom(1024)
+    msg_type, _ = parse_message(data)
+    if msg_type == MSG_SYN_ACK:
+        client_sock.sendto(create_message(MSG_ACK), server_address)
+        print("Handshake complete with server")
+        return True
+    return False
+
+# Server Code
 def start_server(local_host='localhost', local_port=65432):
-    """
-    Starts the server to listen for incoming UDP messages.
-    """                       #   IPv4         UDP
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server_sock:
         try:
             server_sock.bind((local_host, local_port))
@@ -19,17 +56,26 @@ def start_server(local_host='localhost', local_port=65432):
             client_address = None
             stop_event = threading.Event()
 
+            client_address = handle_handshake_server(server_sock)
+            if client_address:
+                pass
+            else:
+                print("Handshake failed.")
+                return
+
             def receive_messages():
-                nonlocal client_address
                 while not stop_event.is_set():
                     try:
                         data, addr = server_sock.recvfrom(1024)
                         if not data:
                             continue
-                        if client_address is None:
-                            client_address = addr
-                            print(f"Connected to client at {client_address}")
-                        print(f"\n[Client {addr}] {data.decode()}")
+                        msg_type, msg_data = parse_message(data)
+                        if msg_type == MSG_FIN:
+                            print("Client initiated termination.")
+                            stop_event.set()
+                            break
+                        elif msg_type == MSG_DEFAULT:
+                            print(f"\n[Client {addr}] {msg_data.decode()}")
                     except Exception as e:
                         print(f"\nReceiving error: {e}")
                         stop_event.set()
@@ -41,10 +87,11 @@ def start_server(local_host='localhost', local_port=65432):
                         message = input()
                         if message.lower() == 'exit':
                             print("Exiting communication.")
+                            server_sock.sendto(create_message(MSG_FIN), client_address)
                             stop_event.set()
                             break
                         if client_address:
-                            server_sock.sendto(message.encode(), client_address)
+                            server_sock.sendto(create_message(MSG_DEFAULT, message.encode()), client_address)
                         else:
                             print("No client connected to send messages.")
                     except Exception as e:
@@ -52,24 +99,18 @@ def start_server(local_host='localhost', local_port=65432):
                         stop_event.set()
                         break
 
-            # Start receiving and sending threads
             recv_thread = threading.Thread(target=receive_messages, daemon=True)
             send_thread = threading.Thread(target=send_messages, daemon=True)
             recv_thread.start()
             send_thread.start()
-
-            # Wait for both threads to finish
             recv_thread.join()
             send_thread.join()
             print("Server stopped communication.")
         except Exception as e:
             print(f"Server error: {e}")
-            
 
+# Client Code
 def start_client(local_host='localhost', local_port=65433, server_host='localhost', server_port=65432):
-    """
-    Starts the client to send and receive UDP messages to/from the server.
-    """
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_sock:
         try:
             client_sock.bind((local_host, local_port))
@@ -77,13 +118,25 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
             server_address = (server_host, server_port)
             stop_event = threading.Event()
 
+            if handle_handshake_client(client_sock, server_address):
+                pass
+            else:
+                print("Handshake failed.")
+                return
+
             def receive_messages():
                 while not stop_event.is_set():
                     try:
                         data, addr = client_sock.recvfrom(1024)
                         if not data:
                             continue
-                        print(f"\n[Server {addr}] {data.decode()}")
+                        msg_type, msg_data = parse_message(data)
+                        if msg_type == MSG_FIN:
+                            print("Server initiated termination.")
+                            stop_event.set()
+                            break
+                        elif msg_type == MSG_DEFAULT:
+                            print(f"\n[Server {addr}] {msg_data.decode()}")
                     except Exception as e:
                         print(f"\nReceiving error: {e}")
                         stop_event.set()
@@ -95,32 +148,27 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
                         message = input()
                         if message.lower() == 'exit':
                             print("Exiting communication.")
+                            client_sock.sendto(create_message(MSG_FIN), server_address)
                             stop_event.set()
                             break
-                        client_sock.sendto(message.encode(), server_address)
+                        client_sock.sendto(create_message(MSG_DEFAULT, message.encode()), server_address)
                     except Exception as e:
                         print(f"\nSending error: {e}")
                         stop_event.set()
                         break
 
-            # Start receiving and sending threads
             recv_thread = threading.Thread(target=receive_messages, daemon=True)
             send_thread = threading.Thread(target=send_messages, daemon=True)
             recv_thread.start()
             send_thread.start()
-
-            # Wait for both threads to finish
             recv_thread.join()
             send_thread.join()
             print("Client stopped communication.")
         except Exception as e:
             print(f"Client error: {e}")
 
-
+# Main Function
 def main():
-    """
-    Main function to choose between server and client modes with UDP bidirectional communication.
-    """
     while True:
         mode = input("\nSelect mode (server/client/exit): ").strip().lower()
         if mode == 'server':
@@ -147,7 +195,6 @@ def main():
             break
         else:
             print("Invalid mode selected. Please choose 'server', 'client', or 'exit'.")
-
 
 if __name__ == "__main__":
     main()
