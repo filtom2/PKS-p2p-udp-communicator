@@ -25,6 +25,10 @@ def parse_message(message):
 
 # Server hs
 def handle_handshake_server(server_sock):
+    """
+    Handle the handshake process for the server.
+    Server receives 1.5) SYN and sends 2) SYN_ACK then receives 3.5) ACK from client
+    """
     data, addr = server_sock.recvfrom(1024)
     msg_type, _ = parse_message(data)
     if msg_type == MSG_SYN:
@@ -38,6 +42,9 @@ def handle_handshake_server(server_sock):
 
 # Client hs
 def handle_handshake_client(client_sock, server_address):
+    """
+    Sends 1) SYN to server,  receives 2.5) SYN_ACK, send 3) ACK to server
+    """
     client_sock.sendto(create_message(MSG_SYN), server_address)
     data, addr = client_sock.recvfrom(1024)
     msg_type, _ = parse_message(data)
@@ -49,6 +56,9 @@ def handle_handshake_client(client_sock, server_address):
 
 # Server Code
 def start_server(local_host='localhost', local_port=65432):
+    """
+    Server code to start listening on the specified host and port.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server_sock:
         try:
             server_sock.bind((local_host, local_port))
@@ -111,6 +121,9 @@ def start_server(local_host='localhost', local_port=65432):
 
 # Client Code
 def start_client(local_host='localhost', local_port=65433, server_host='localhost', server_port=65432):
+    """
+    Client code to start listening on the specified host and port.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_sock:
         try:
             client_sock.bind((local_host, local_port))
