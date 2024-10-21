@@ -80,7 +80,7 @@ def start_server(local_host='localhost', local_port=65432):
                             continue
                         msg_type, msg_data = parse_message(data)
                         if msg_type == MSG_FIN:
-                            print("Client initiated termination.")
+                            print("Terminating connection.")
                             stop_event.set()
                             break
                         elif msg_type == MSG_DEFAULT:
@@ -180,7 +180,7 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
 
 def main():
     while True:
-        mode = input("\nSelect mode (server/client/exit): ").strip().lower()
+        mode = input("\nSelect mode (server/client/exit): ")
         if mode == 'server':
             local_host = input("Enter host to bind (default 'localhost'): ") or 'localhost'
             port_input = input("Enter port to bind (default 65432): ") or '65432'
@@ -188,7 +188,7 @@ def main():
                 local_port = int(port_input)
                 start_server(local_host, local_port)
             except ValueError:
-                print("Invalid port number. Please enter an integer.")
+                print("Invalid port number.")
         elif mode == 'client':
             local_host = input("Enter your local host to bind (default 'localhost'): ") or 'localhost'
             local_port_input = input("Enter your local port to bind (default 65433): ") or '65433'
