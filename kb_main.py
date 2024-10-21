@@ -19,11 +19,10 @@ def create_message(msg_type, data=b''):
     return bytes([msg_type]) + data
 
 def parse_message(message):
-    msg_type = message[0]
-    data = message[1:]
+    msg_type = message[0] # First byte is the type
+    data = message[1:]    # Rest is the data
     return msg_type, data
 
-# Server hs
 def handle_handshake_server(server_sock):
     """
     Handle the handshake process for the server.
@@ -36,11 +35,11 @@ def handle_handshake_server(server_sock):
         data, addr = server_sock.recvfrom(1024)
         msg_type, _ = parse_message(data)
         if msg_type == MSG_ACK:
-            print(f"Handshake complete with client at {addr}")
+            print(f"\nHandshake complete with client at {addr}\n")
             return addr
+        
     return None
 
-# Client hs
 def handle_handshake_client(client_sock, server_address):
     """
     Sends 1) SYN to server,  receives 2.5) SYN_ACK, send 3) ACK to server
@@ -50,11 +49,11 @@ def handle_handshake_client(client_sock, server_address):
     msg_type, _ = parse_message(data)
     if msg_type == MSG_SYN_ACK:
         client_sock.sendto(create_message(MSG_ACK), server_address)
-        print("Handshake complete with server")
+        print("\nHandshake complete with server.\n")
         return True
+    
     return False
 
-# Server Code
 def start_server(local_host='localhost', local_port=65432):
     """
     Server code to start listening on the specified host and port.
@@ -119,7 +118,6 @@ def start_server(local_host='localhost', local_port=65432):
         except Exception as e:
             print(f"Server error: {e}")
 
-# Client Code
 def start_client(local_host='localhost', local_port=65433, server_host='localhost', server_port=65432):
     """
     Client code to start listening on the specified host and port.
@@ -180,7 +178,6 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
         except Exception as e:
             print(f"Client error: {e}")
 
-# Main Function
 def main():
     while True:
         mode = input("\nSelect mode (server/client/exit): ").strip().lower()
@@ -202,12 +199,13 @@ def main():
                 server_port = int(server_port_input)
                 start_client(local_host, local_port, server_host, server_port)
             except ValueError:
-                print("Invalid port number. Please enter integers.")
+                print("Invalid port number.")
         elif mode == 'exit':
             print("Exiting program.")
             break
         else:
-            print("Invalid mode selected. Please choose 'server', 'client', or 'exit'.")
+            print("Invalid mode selected.")
+
 
 if __name__ == "__main__":
     main()
