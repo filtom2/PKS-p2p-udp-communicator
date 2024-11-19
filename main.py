@@ -21,15 +21,15 @@ MSG_FILE_LAST_FRAGMENT = 10
 def create_message(msg_type, sequence_number, data=b''):
     crc = zlib.crc32(data)
     crc_bytes = crc.to_bytes(4, 'big')
-    sequence_bytes = sequence_number.to_bytes(2, 'big')
+    sequence_bytes = sequence_number.to_bytes(4, 'big')  # Updated to 4 bytes
     return bytes([msg_type]) + sequence_bytes + crc_bytes + data
 
 
 def parse_message_with_sequence(message):
     msg_type = message[0]
-    sequence_number = int.from_bytes(message[1:3], 'big')
-    received_crc = int.from_bytes(message[3:7], 'big')
-    data = message[7:]
+    sequence_number = int.from_bytes(message[1:5], 'big')  # Updated to 4 bytes
+    received_crc = int.from_bytes(message[5:9], 'big')     # Adjusted index
+    data = message[9:]                                     # Adjusted index
     if zlib.crc32(data) != received_crc:
         print("Warning: CRC mismatch!")
         return None, None, None
@@ -46,18 +46,9 @@ def keep_alive(sock, addr, stop_event, lost_connection_event, interval=5):
             break
 
 
-def receive_messages(sock, stop_event, lost_connection_event, addr, save_directory, interval=5, buffer_size=1024):
+def receive_messages(sock, stop_event, lost_connection_event, addr, save_directory, interval=5, buffer_size=2048):
     last_activity = time.time()
     message_buffers = {}  # Dictionary to store messages by message ID
-    # message_buffers[message_id] = {
-    #     'type': 'message' or 'file',
-    #     'fragments': {},
-    #     'num_fragments_received': int,
-    #     'total_size': int,
-    #     'start_time': time,
-    #     'file_name': str,
-    #     'expected_total_size': int,
-    # }
 
     while not stop_event.is_set():
         try:
@@ -78,7 +69,7 @@ def receive_messages(sock, stop_event, lost_connection_event, addr, save_directo
                     file_name = msg_data[1:1+file_name_length].decode()
                     file_size = int.from_bytes(msg_data[1+file_name_length:1+file_name_length+4], 'big')
                     # Prepare to receive file data
-                    message_id = sequence_number >> 8  # Upper 8 bits
+                    message_id = sequence_number >> 16  # Upper 16 bits
                     message_buffers[message_id] = {
                         'type': 'file',
                         'fragments': {},
@@ -92,8 +83,8 @@ def receive_messages(sock, stop_event, lost_connection_event, addr, save_directo
                 elif msg_type in (MSG_FILE_FRAGMENT, MSG_FILE_LAST_FRAGMENT, MSG_FRAGMENT, MSG_LAST_FRAGMENT):
                     last_activity = time.time()
                     # Extract message_id and fragment_number from sequence_number
-                    message_id = sequence_number >> 8  # Upper 8 bits
-                    fragment_number = sequence_number & 0xFF  # Lower 8 bits
+                    message_id = sequence_number >> 16    # Upper 16 bits
+                    fragment_number = sequence_number & 0xFFFF  # Lower 16 bits
 
                     if message_id not in message_buffers:
                         if msg_type in (MSG_FILE_FRAGMENT, MSG_FILE_LAST_FRAGMENT):
@@ -195,14 +186,22 @@ def handle_handshake_server(server_sock):
     return None
 
 
-def handle_handshake_client(client_sock, server_address):
-    client_sock.sendto(create_message(MSG_SYN, 0), server_address)
-    data, _ = client_sock.recvfrom(1024)
-    msg_type, _, _ = parse_message_with_sequence(data)
-    if msg_type == MSG_SYN_ACK:
-        client_sock.sendto(create_message(MSG_ACK, 0), server_address)
-        print("\nHandshake complete with server.\n")
-        return True
+def handle_handshake_client(client_sock, server_address, max_retries=3, timeout=5):
+    client_sock.settimeout(timeout)
+    retries = 0
+    while retries < max_retries:
+        try:
+            client_sock.sendto(create_message(MSG_SYN, 0), server_address)
+            data, _ = client_sock.recvfrom(1024)
+            msg_type, _, _ = parse_message_with_sequence(data)
+            if msg_type == MSG_SYN_ACK:
+                client_sock.sendto(create_message(MSG_ACK, 0), server_address)
+                print("\nHandshake complete with server.\n")
+                return True
+        except socket.timeout:
+            retries += 1
+            print(f"Handshake attempt {retries} failed, retrying...")
+    print("Handshake failed after maximum retries.")
     return False
 
 
@@ -261,6 +260,7 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
             save_directory = input("Enter directory to save received files (default '.'): ") or '.'
             if not os.path.exists(save_directory):
                 os.makedirs(save_directory)
+            print(save_directory)
 
             server_address = (server_host, server_port)
             stop_event = threading.Event()
@@ -297,7 +297,6 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
         except Exception as e:
             print(f"Client error: {e}")
 
-
 def send_messages(sock, addr, stop_event):
     sequence_number = 0  # Initialize sequence number
     message_id_counter = 0  # Initialize message ID counter
@@ -307,8 +306,8 @@ def send_messages(sock, addr, stop_event):
             max_data_size_input = input("Enter the minimal fragmentation size (bytes): ")
             try:
                 MAX_DATA_SIZE = int(max_data_size_input)
-                if MAX_DATA_SIZE <= 0:
-                    print("Fragmentation size must be a positive integer.")
+                if MAX_DATA_SIZE <= 0 or MAX_DATA_SIZE > 1024:
+                    print("Fragmentation size must be a positive integer up to 1024 bytes.")
                     continue
             except ValueError:
                 print("Invalid input. Please enter a positive integer.")
@@ -327,6 +326,9 @@ def send_messages(sock, addr, stop_event):
                         file_data = f.read()
                     file_name = os.path.basename(file_path)
                     total_size = len(file_data)
+                    # Prepare message ID
+                    message_id = message_id_counter
+                    message_id_counter = (message_id_counter + 1) % 65536  # Keep it within 16 bits
                     # Send MSG_FILE_INFO message
                     # Data format: file_name_length (1 byte) + file_name + file_size (4 bytes)
                     file_name_bytes = file_name.encode()
@@ -336,14 +338,12 @@ def send_messages(sock, addr, stop_event):
                         continue
                     file_size_bytes = total_size.to_bytes(4, 'big')
                     data = bytes([file_name_length]) + file_name_bytes + file_size_bytes
+                    # Construct sequence_number with message_id (upper 16 bits) and 0 for fragment_number
+                    sequence_number = (message_id << 16) | 0
                     sock.sendto(create_message(MSG_FILE_INFO, sequence_number, data), addr)
-                    sequence_number = (sequence_number + 1) % 65536
                     # Now send the file data, fragmented
                     fragments = [file_data[i:i+MAX_DATA_SIZE] for i in range(0, total_size, MAX_DATA_SIZE)]
                     num_fragments = len(fragments)
-                    message_id = message_id_counter
-                    message_id_counter = (message_id_counter + 1) % 256  # Keep it within 8 bits
-
                     for i, fragment in enumerate(fragments):
                         if i == num_fragments - 1:
                             msg_type = MSG_FILE_LAST_FRAGMENT
@@ -351,8 +351,11 @@ def send_messages(sock, addr, stop_event):
                             msg_type = MSG_FILE_FRAGMENT
 
                         fragment_number = i  # Fragment index
+                        if fragment_number > 65535:
+                            print("Fragment number exceeds maximum value.")
+                            break
                         # Construct sequence_number with message_id and fragment_number
-                        sequence_number = (message_id << 8) | fragment_number
+                        sequence_number = (message_id << 16) | fragment_number
                         sock.sendto(create_message(msg_type, sequence_number, fragment), addr)
                     # Display info
                     print(f"Sent file: Name={file_name}, Size={total_size} bytes, Fragments={num_fragments}")
@@ -364,17 +367,16 @@ def send_messages(sock, addr, stop_event):
                 total_size = len(message_bytes)
                 if total_size <= MAX_DATA_SIZE:
                     # Send as a single message
-                    sock.sendto(create_message(MSG_DEFAULT, sequence_number, message_bytes), addr)
+                    sock.sendto(create_message(MSG_DEFAULT, 0, message_bytes), addr)
                     # Display info
                     print(f"Sent message: Name=message, Size={total_size} bytes, Fragments=1")
-                    sequence_number = (sequence_number + 1) % 65536
                 else:
                     # Fragment the message
                     fragments = [message_bytes[i:i+MAX_DATA_SIZE] for i in range(0, total_size, MAX_DATA_SIZE)]
                     num_fragments = len(fragments)
+                    # Prepare message ID
                     message_id = message_id_counter
-                    message_id_counter = (message_id_counter + 1) % 256  # Keep it within 8 bits
-
+                    message_id_counter = (message_id_counter + 1) % 65536  # Keep it within 16 bits
                     for i, fragment in enumerate(fragments):
                         if i == num_fragments - 1:
                             # Last fragment
@@ -383,8 +385,11 @@ def send_messages(sock, addr, stop_event):
                             msg_type = MSG_FRAGMENT
 
                         fragment_number = i  # Fragment index
+                        if fragment_number > 65535:
+                            print("Fragment number exceeds maximum value.")
+                            break
                         # Construct sequence_number with message_id and fragment_number
-                        sequence_number = (message_id << 8) | fragment_number
+                        sequence_number = (message_id << 16) | fragment_number
                         sock.sendto(create_message(msg_type, sequence_number, fragment), addr)
                     # Display info
                     print(f"Sent message: Name=message, Size={total_size} bytes, Fragments={num_fragments}")
@@ -392,6 +397,7 @@ def send_messages(sock, addr, stop_event):
             print(f"Sending error: {e}")
             stop_event.set()
             break
+
 
 
 def main():
