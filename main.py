@@ -13,15 +13,17 @@ MSG_FIN = 4
 MSG_KEEP_ALIVE = 5
 MSG_FRAGMENT = 6
 MSG_LAST_FRAGMENT = 7
-MSG_FILE_DEFAULT = 8
+MSG_FILE_INFO = 8
 MSG_FILE_FRAGMENT = 9
 MSG_FILE_LAST_FRAGMENT = 10
+
 
 def create_message(msg_type, sequence_number, data=b''):
     crc = zlib.crc32(data)
     crc_bytes = crc.to_bytes(4, 'big')
     sequence_bytes = sequence_number.to_bytes(2, 'big')
     return bytes([msg_type]) + sequence_bytes + crc_bytes + data
+
 
 def parse_message_with_sequence(message):
     msg_type = message[0]
@@ -33,6 +35,7 @@ def parse_message_with_sequence(message):
         return None, None, None
     return msg_type, data, sequence_number
 
+
 def keep_alive(sock, addr, stop_event, lost_connection_event, interval=5):
     while not stop_event.is_set():
         time.sleep(interval)
@@ -42,13 +45,19 @@ def keep_alive(sock, addr, stop_event, lost_connection_event, interval=5):
             stop_event.set()
             break
 
-def receive_messages(sock, stop_event, lost_connection_event, addr, interval=5, buffer_size=1024):
+
+def receive_messages(sock, stop_event, lost_connection_event, addr, save_directory, interval=5, buffer_size=1024):
     last_activity = time.time()
-    fragment_buffers = {}  # Dictionary to store fragments by message ID
-    message_sizes = {}     # Dictionary to store total size per message ID
-    num_fragments_received = {}  # Dictionary to store number of fragments received per message ID
-    message_start_times = {}  # Record when the first fragment was received
-    message_types = {}  # Store message type per message ID
+    message_buffers = {}  # Dictionary to store messages by message ID
+    # message_buffers[message_id] = {
+    #     'type': 'message' or 'file',
+    #     'fragments': {},
+    #     'num_fragments_received': int,
+    #     'total_size': int,
+    #     'start_time': time,
+    #     'file_name': str,
+    #     'expected_total_size': int,
+    # }
 
     while not stop_event.is_set():
         try:
@@ -62,75 +71,92 @@ def receive_messages(sock, stop_event, lost_connection_event, addr, interval=5, 
                     break
                 elif msg_type == MSG_KEEP_ALIVE:
                     last_activity = time.time()  # Reset activity timer on Keep-Alive
-                elif msg_type in (MSG_DEFAULT, MSG_FRAGMENT, MSG_LAST_FRAGMENT,
-                                  MSG_FILE_DEFAULT, MSG_FILE_FRAGMENT, MSG_FILE_LAST_FRAGMENT):
+                elif msg_type == MSG_FILE_INFO:
+                    last_activity = time.time()
+                    # Extract file_name_length, file_name, file_size
+                    file_name_length = msg_data[0]
+                    file_name = msg_data[1:1+file_name_length].decode()
+                    file_size = int.from_bytes(msg_data[1+file_name_length:1+file_name_length+4], 'big')
+                    # Prepare to receive file data
+                    message_id = sequence_number >> 8  # Upper 8 bits
+                    message_buffers[message_id] = {
+                        'type': 'file',
+                        'fragments': {},
+                        'num_fragments_received': 0,
+                        'total_size': 0,
+                        'start_time': time.time(),
+                        'file_name': file_name,
+                        'expected_total_size': file_size,
+                    }
+                    print(f"Receiving file: {file_name}, Size: {file_size} bytes")
+                elif msg_type in (MSG_FILE_FRAGMENT, MSG_FILE_LAST_FRAGMENT, MSG_FRAGMENT, MSG_LAST_FRAGMENT):
                     last_activity = time.time()
                     # Extract message_id and fragment_number from sequence_number
                     message_id = sequence_number >> 8  # Upper 8 bits
                     fragment_number = sequence_number & 0xFF  # Lower 8 bits
 
-                    if message_id not in fragment_buffers:
-                        fragment_buffers[message_id] = {}
-                        num_fragments_received[message_id] = 0
-                        message_sizes[message_id] = 0
-                        # Record the start time for this message
-                        message_start_times[message_id] = time.time()
-                        # Store the message type
-                        message_types[message_id] = msg_type
-
-                    fragment_buffers[message_id][fragment_number] = msg_data
-                    num_fragments_received[message_id] += 1
-                    message_sizes[message_id] += len(msg_data)
-
-                    if msg_type in (MSG_DEFAULT, MSG_FILE_DEFAULT):
-                        # Single message, no fragmentation
-                        complete_message = msg_data
-                        elapsed_time = time.time() - message_start_times[message_id]
-                        if msg_type == MSG_DEFAULT:
-                            print(f"[Peer {addr}] {complete_message.decode()}")
-                            print(f"Received message: Name=message, Size={len(complete_message)} bytes, Fragments=1, Time={elapsed_time:.2f}s")
+                    if message_id not in message_buffers:
+                        if msg_type in (MSG_FILE_FRAGMENT, MSG_FILE_LAST_FRAGMENT):
+                            print("Warning: Received file fragment before file info.")
+                            continue
                         else:
-                            # Handle file
-                            title, content = complete_message.split(b'\0', 1)
-                            file_name = title.decode()
-                            with open(file_name, 'wb') as f:
-                                f.write(content)
-                            print(f"Received file: Name={file_name}, Size={len(content)} bytes, Fragments=1, Time={elapsed_time:.2f}s")
-                        # Clean up
-                        del fragment_buffers[message_id]
-                        del num_fragments_received[message_id]
-                        del message_sizes[message_id]
-                        del message_start_times[message_id]
-                        del message_types[message_id]
-                    elif msg_type in (MSG_LAST_FRAGMENT, MSG_FILE_LAST_FRAGMENT):
-                        # Last fragment received, reassemble message
-                        fragments = fragment_buffers[message_id]
-                        # Sort fragments by fragment_number
-                        ordered_fragments = [fragments[i] for i in sorted(fragments)]
-                        complete_message = b''.join(ordered_fragments)
-                        total_size = message_sizes[message_id]
-                        num_fragments = num_fragments_received[message_id]
-                        elapsed_time = time.time() - message_start_times[message_id]
-                        if message_types[message_id] in (MSG_DEFAULT, MSG_FRAGMENT, MSG_LAST_FRAGMENT):
-                            # Text message
+                            # Initialize buffer for message
+                            message_buffers[message_id] = {
+                                'type': 'message',
+                                'fragments': {},
+                                'num_fragments_received': 0,
+                                'total_size': 0,
+                                'start_time': time.time(),
+                            }
+
+                    buffer = message_buffers[message_id]
+                    buffer['fragments'][fragment_number] = msg_data
+                    buffer['num_fragments_received'] += 1
+                    buffer['total_size'] += len(msg_data)
+
+                    if buffer['type'] == 'file':
+                        if msg_type == MSG_FILE_LAST_FRAGMENT:
+                            # Last fragment received, reassemble file
+                            fragments = buffer['fragments']
+                            # Sort fragments by fragment_number
+                            ordered_fragments = [fragments[i] for i in sorted(fragments)]
+                            complete_data = b''.join(ordered_fragments)
+                            total_size = buffer['total_size']
+                            num_fragments = buffer['num_fragments_received']
+                            elapsed_time = time.time() - buffer['start_time']
+                            # Save the file
+                            save_path = os.path.join(save_directory, buffer['file_name'])
+                            with open(save_path, 'wb') as f:
+                                f.write(complete_data)
+                            print(f"Received file: Name={buffer['file_name']}, Size={total_size} bytes, Fragments={num_fragments}, Time={elapsed_time:.2f}s")
+                            # Clean up
+                            del message_buffers[message_id]
+                        else:
+                            # Continue receiving fragments
+                            pass
+                    else:
+                        # Handle message fragments
+                        if msg_type == MSG_LAST_FRAGMENT:
+                            # Last fragment received, reassemble message
+                            fragments = buffer['fragments']
+                            # Sort fragments by fragment_number
+                            ordered_fragments = [fragments[i] for i in sorted(fragments)]
+                            complete_message = b''.join(ordered_fragments)
+                            total_size = buffer['total_size']
+                            num_fragments = buffer['num_fragments_received']
+                            elapsed_time = time.time() - buffer['start_time']
                             print(f"[Peer {addr}] {complete_message.decode()}")
                             print(f"Received message: Name=message, Size={total_size} bytes, Fragments={num_fragments}, Time={elapsed_time:.2f}s")
+                            # Clean up
+                            del message_buffers[message_id]
                         else:
-                            # File message
-                            title, content = complete_message.split(b'\0', 1)
-                            file_name = title.decode()
-                            with open(file_name, 'wb') as f:
-                                f.write(content)
-                            print(f"Received file: Name={file_name}, Size={len(content)} bytes, Fragments={num_fragments}, Time={elapsed_time:.2f}s")
-                        # Clean up
-                        del fragment_buffers[message_id]
-                        del num_fragments_received[message_id]
-                        del message_sizes[message_id]
-                        del message_start_times[message_id]
-                        del message_types[message_id]
-                    else:
-                        # Continue receiving fragments
-                        pass
+                            # Continue receiving fragments
+                            pass
+                elif msg_type == MSG_DEFAULT:
+                    last_activity = time.time()
+                    # Single message, no fragmentation
+                    print(f"[Peer {addr}] {msg_data.decode()}")
+                    print(f"Received message: Name=message, Size={len(msg_data)} bytes, Fragments=1, Time=0.00s")
                 else:
                     print(f"Unknown message type: {msg_type}")
             else:
@@ -155,6 +181,7 @@ def receive_messages(sock, stop_event, lost_connection_event, addr, interval=5, 
             stop_event.set()
             break
 
+
 def handle_handshake_server(server_sock):
     data, addr = server_sock.recvfrom(1024)
     msg_type, _, _ = parse_message_with_sequence(data)
@@ -167,6 +194,7 @@ def handle_handshake_server(server_sock):
             return addr
     return None
 
+
 def handle_handshake_client(client_sock, server_address):
     client_sock.sendto(create_message(MSG_SYN, 0), server_address)
     data, _ = client_sock.recvfrom(1024)
@@ -177,11 +205,17 @@ def handle_handshake_client(client_sock, server_address):
         return True
     return False
 
+
 def start_server(local_host='localhost', local_port=65432):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server_sock:
         try:
             server_sock.bind((local_host, local_port))
             print(f"Server listening on {local_host}:{local_port}")
+
+            save_directory = input("Enter directory to save received files (default '.'): ") or '.'
+            if not os.path.exists(save_directory):
+                os.makedirs(save_directory)
+
             stop_event = threading.Event()
             lost_connection_event = threading.Event()
 
@@ -196,7 +230,7 @@ def start_server(local_host='localhost', local_port=65432):
 
                 recv_thread = threading.Thread(
                     target=receive_messages,
-                    args=(server_sock, stop_event, lost_connection_event, client_address),
+                    args=(server_sock, stop_event, lost_connection_event, client_address, save_directory),
                     daemon=True
                 )
                 recv_thread.start()
@@ -217,11 +251,17 @@ def start_server(local_host='localhost', local_port=65432):
         except Exception as e:
             print(f"Server error: {e}")
 
+
 def start_client(local_host='localhost', local_port=65433, server_host='localhost', server_port=65432):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client_sock:
         try:
             client_sock.bind((local_host, local_port))
             print(f"Client listening on {local_host}:{local_port}")
+
+            save_directory = input("Enter directory to save received files (default '.'): ") or '.'
+            if not os.path.exists(save_directory):
+                os.makedirs(save_directory)
+
             server_address = (server_host, server_port)
             stop_event = threading.Event()
             lost_connection_event = threading.Event()
@@ -236,7 +276,7 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
 
                 recv_thread = threading.Thread(
                     target=receive_messages,
-                    args=(client_sock, stop_event, lost_connection_event, server_address),
+                    args=(client_sock, stop_event, lost_connection_event, server_address, save_directory),
                     daemon=True
                 )
                 recv_thread.start()
@@ -257,6 +297,7 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
         except Exception as e:
             print(f"Client error: {e}")
 
+
 def send_messages(sock, addr, stop_event):
     sequence_number = 0  # Initialize sequence number
     message_id_counter = 0  # Initialize message ID counter
@@ -273,13 +314,52 @@ def send_messages(sock, addr, stop_event):
                 print("Invalid input. Please enter a positive integer.")
                 continue
 
-            choice = input("Do you want to send a text message or a file? (text/file/exit): ").lower()
-            if choice == 'exit':
+            message = input("Enter your message ('exit' to quit, 'file' to send a file): ")
+            if message.lower() == 'exit':
                 sock.sendto(create_message(MSG_FIN, 0), addr)
                 stop_event.set()
                 break
-            elif choice == 'text':
-                message = input("Enter your message: ")
+            elif message.lower() == 'file':
+                # Prompt for file path
+                file_path = input("Enter the file path to send: ")
+                try:
+                    with open(file_path, 'rb') as f:
+                        file_data = f.read()
+                    file_name = os.path.basename(file_path)
+                    total_size = len(file_data)
+                    # Send MSG_FILE_INFO message
+                    # Data format: file_name_length (1 byte) + file_name + file_size (4 bytes)
+                    file_name_bytes = file_name.encode()
+                    file_name_length = len(file_name_bytes)
+                    if file_name_length > 255:
+                        print("File name is too long.")
+                        continue
+                    file_size_bytes = total_size.to_bytes(4, 'big')
+                    data = bytes([file_name_length]) + file_name_bytes + file_size_bytes
+                    sock.sendto(create_message(MSG_FILE_INFO, sequence_number, data), addr)
+                    sequence_number = (sequence_number + 1) % 65536
+                    # Now send the file data, fragmented
+                    fragments = [file_data[i:i+MAX_DATA_SIZE] for i in range(0, total_size, MAX_DATA_SIZE)]
+                    num_fragments = len(fragments)
+                    message_id = message_id_counter
+                    message_id_counter = (message_id_counter + 1) % 256  # Keep it within 8 bits
+
+                    for i, fragment in enumerate(fragments):
+                        if i == num_fragments - 1:
+                            msg_type = MSG_FILE_LAST_FRAGMENT
+                        else:
+                            msg_type = MSG_FILE_FRAGMENT
+
+                        fragment_number = i  # Fragment index
+                        # Construct sequence_number with message_id and fragment_number
+                        sequence_number = (message_id << 8) | fragment_number
+                        sock.sendto(create_message(msg_type, sequence_number, fragment), addr)
+                    # Display info
+                    print(f"Sent file: Name={file_name}, Size={total_size} bytes, Fragments={num_fragments}")
+                except Exception as e:
+                    print(f"Failed to send file: {e}")
+            else:
+                # Handle text message
                 message_bytes = message.encode()
                 total_size = len(message_bytes)
                 if total_size <= MAX_DATA_SIZE:
@@ -308,48 +388,11 @@ def send_messages(sock, addr, stop_event):
                         sock.sendto(create_message(msg_type, sequence_number, fragment), addr)
                     # Display info
                     print(f"Sent message: Name=message, Size={total_size} bytes, Fragments={num_fragments}")
-            elif choice == 'file':
-                file_path = input("Enter the file path: ")
-                title = input("Enter the file title to send: ")
-                if not os.path.isfile(file_path):
-                    print("File does not exist. Please provide a valid file path.")
-                    continue
-                with open(file_path, 'rb') as f:
-                    file_content = f.read()
-                # Prepend the title to the content, separated by a null byte
-                title_bytes = title.encode()
-                combined_data = title_bytes + b'\0' + file_content
-                total_size = len(combined_data)
-                if total_size <= MAX_DATA_SIZE:
-                    # Send as a single message
-                    sock.sendto(create_message(MSG_FILE_DEFAULT, sequence_number, combined_data), addr)
-                    print(f"Sent file: Name={title}, Size={total_size} bytes, Fragments=1")
-                    sequence_number = (sequence_number + 1) % 65536
-                else:
-                    # Fragment the file
-                    fragments = [combined_data[i:i+MAX_DATA_SIZE] for i in range(0, total_size, MAX_DATA_SIZE)]
-                    num_fragments = len(fragments)
-                    message_id = message_id_counter
-                    message_id_counter = (message_id_counter + 1) % 256  # Keep it within 8 bits
-
-                    for i, fragment in enumerate(fragments):
-                        if i == num_fragments - 1:
-                            # Last fragment
-                            msg_type = MSG_FILE_LAST_FRAGMENT
-                        else:
-                            msg_type = MSG_FILE_FRAGMENT
-
-                        fragment_number = i  # Fragment index
-                        # Construct sequence_number with message_id and fragment_number
-                        sequence_number = (message_id << 8) | fragment_number
-                        sock.sendto(create_message(msg_type, sequence_number, fragment), addr)
-                    print(f"Sent file: Name={title}, Size={total_size} bytes, Fragments={num_fragments}")
-            else:
-                print("Invalid choice. Please enter 'text', 'file', or 'exit'.")
         except Exception as e:
             print(f"Sending error: {e}")
             stop_event.set()
             break
+
 
 def main():
     while True:
@@ -381,6 +424,7 @@ def main():
 
         else:
             print("Invalid mode selected.")
+
 
 if __name__ == "__main__":
     main()
