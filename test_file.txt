@@ -1,1 +1,78 @@
 ahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhoj
+Prosi m nech o dobre presmeroalo @J*!%(*J!@$(J!#(@#!J !(%J#@ JA							J(! *%@A 
+
+Also in the fragmentation part of our code, make it so that when the receiver receives a file, display the order of the message, and make the sender display the corresponding ACK\
+
+eceived ACK for sequence number 5
+ACK received for fragment 5 (Sequence number 5)
+Sent fragment 6 (Sequence number 6)
+Received ACK for sequence number 6
+ACK received for fragment 6 (Sequence number 6)
+Sent fragment 7 (Sequence number 7)
+Received ACK for sequence number 7
+ACK received for fragment 7 (Sequence number 7)
+Sent message: Name=message, Size=1eceived ACK for sequence number 5
+ACK received for fragment 5 (Sequence number 5)
+Sent fragment 6 (Sequence number 6)
+Received ACK for sequence number 6
+ACK received for fragment 6 (Sequence number 6)
+Sent fragment 7 (Sequence number 7)
+Received ACK for sequence number 7
+ACK received for fragment 7 (Sequence number 7)
+Sent message: Name=message, Size=1eceived ACK for sequence number 5
+ACK received for fragment 5 (Sequence number 5)
+Sent fragment 6 (Sequence number 6)
+Received ACK for sequence number 6
+ACK received for fragment 6 (Sequence number 6)
+Sent fragment 7 (Sequence number 7)
+Received ACK for sequence number 7
+ACK received for fragment 7 (Sequence number 7)
+Sent message: Name=message, Size=1eceived ACK for sequence number 5
+ACK received for fragment 5 (Sequence number 5)
+Sent fragment 6 (Sequence number 6)
+Received ACK for sequence number 6
+ACK received for fragment 6 (Sequence number 6)
+Sent fragment 7 (Sequence number 7)
+Received ACK for sequence number 7
+ACK received for fragment 7 (Sequence number 7)
+Sent message: Name=message, Size=1eceived ACK for sequence number 5
+ACK received for fragment 5 (Sequence number 5)
+Sent fragment 6 (Sequence number 6)
+Received ACK for sequence number 6
+ACK received for fragment 6 (Sequence number 6)
+Sent fragment 7 (Sequence number 7)
+Received ACK for sequence number 7
+ACK received for fragment 7 (Sequence number 7)
+Sent message: Name=message, Size=1eceived ACK for sequence number 5
+ACK received for fragment 5 (Sequence number 5)
+Sent fragment 6 (Sequence number 6)
+Received ACK for sequence number 6
+ACK received for fragment 6 (Sequence number 6)
+Sent fragment 7 (Sequence number 7)
+Received ACK for sequence number 7
+ACK received for fragment 7 (Sequence number 7)
+Sent message: Name=message, Size=1eceived ACK for sequence number 5
+ACK received for fragment 5 (Sequence number 5)
+Sent fragment 6 (Sequence number 6)
+Received ACK for sequence number 6
+ACK received for fragment 6 (Sequence number 6)
+Sent fragment 7 (Sequence number 7)
+Received ACK for sequence number 7
+ACK received for fragment 7 (Sequence number 7)
+Sent message: Name=message, Size=1eceived ACK for sequence number 5
+ACK received for fragment 5 (Sequence number 5)
+Sent fragment 6 (Sequence number 6)
+Received ACK for sequence number 6
+ACK received for fragment 6 (Sequence number 6)
+Sent fragment 7 (Sequence number 7)
+Received ACK for sequence number 7
+ACK received for fragment 7 (Sequence number 7)
+Sent message: Name=message, Size=1eceived ACK for sequence number 5
+ACK received for fragment 5 (Sequence number 5)
+Sent fragment 6 (Sequence number 6)
+Received ACK for sequence number 6
+ACK received for fragment 6 (Sequence number 6)
+Sent fragment 7 (Sequence number 7)
+Received ACK for sequence number 7
+ACK received for fragment 7 (Sequence number 7)
+Sent message: Name=message, Size=1

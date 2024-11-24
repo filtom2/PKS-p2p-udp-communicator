@@ -16,12 +16,13 @@ MSG_LAST_FRAGMENT = 7
 MSG_FILE_INFO = 8
 MSG_FILE_FRAGMENT = 9
 MSG_FILE_LAST_FRAGMENT = 10
+MSG_FRAGMENT_ACK = 11  # New message type for fragment acknowledgment
 
 
 def create_message(msg_type, sequence_number, data=b''):
     crc = zlib.crc32(data)
     crc_bytes = crc.to_bytes(4, 'big')
-    sequence_bytes = sequence_number.to_bytes(4, 'big')  # Updated to 4 bytes
+    sequence_bytes = sequence_number.to_bytes(4, 'big') 
     return bytes([msg_type]) + sequence_bytes + crc_bytes + data
 
 
@@ -36,17 +37,19 @@ def parse_message_with_sequence(message):
     return msg_type, data, sequence_number
 
 
-def keep_alive(sock, addr, stop_event, lost_connection_event, interval=5):
+def keep_alive(sock, addr, stop_event, lost_connection_event, display_keep_alive, interval=5):
     while not stop_event.is_set():
         time.sleep(interval)
         sock.sendto(create_message(MSG_KEEP_ALIVE, 0), addr)
+        if display_keep_alive:
+            print(f"Sending keep-alive packet to {addr}")
 
         if lost_connection_event.is_set():
             stop_event.set()
             break
 
 
-def receive_messages(sock, stop_event, lost_connection_event, addr, save_directory, interval=5, buffer_size=2048):
+def receive_messages(sock, stop_event, lost_connection_event, addr, save_directory, display_keep_alive, acknowledged_sequences, ack_condition, interval=5, buffer_size=2048):
     last_activity = time.time()
     message_buffers = {}  # Dictionary to store messages by message ID
 
@@ -62,6 +65,8 @@ def receive_messages(sock, stop_event, lost_connection_event, addr, save_directo
                     break
                 elif msg_type == MSG_KEEP_ALIVE:
                     last_activity = time.time()  # Reset activity timer on Keep-Alive
+                    if display_keep_alive:
+                        print(f"Received keep-alive packet from {addr}")
                 elif msg_type == MSG_FILE_INFO:
                     last_activity = time.time()
                     # Extract file_name_length, file_name, file_size
@@ -104,6 +109,11 @@ def receive_messages(sock, stop_event, lost_connection_event, addr, save_directo
                     buffer['fragments'][fragment_number] = msg_data
                     buffer['num_fragments_received'] += 1
                     buffer['total_size'] += len(msg_data)
+
+                    # Send ACK back to sender
+                    ack_message = create_message(MSG_FRAGMENT_ACK, sequence_number)
+                    sock.sendto(ack_message, addr)
+                    print(f"Sent ACK for sequence number {sequence_number}")
 
                     if buffer['type'] == 'file':
                         if msg_type == MSG_FILE_LAST_FRAGMENT:
@@ -148,6 +158,13 @@ def receive_messages(sock, stop_event, lost_connection_event, addr, save_directo
                     # Single message, no fragmentation
                     print(f"[Peer {addr}] {msg_data.decode()}")
                     print(f"Received message: Name=message, Size={len(msg_data)} bytes, Fragments=1, Time=0.00s")
+                elif msg_type == MSG_FRAGMENT_ACK:
+                    last_activity = time.time()
+                    ack_sequence_number = sequence_number
+                    with ack_condition:
+                        acknowledged_sequences.add(ack_sequence_number)
+                        ack_condition.notify_all()
+                    print(f"Received ACK for sequence number {ack_sequence_number}")
                 else:
                     print(f"Unknown message type: {msg_type}")
             else:
@@ -215,28 +232,34 @@ def start_server(local_host='localhost', local_port=65432):
             if not os.path.exists(save_directory):
                 os.makedirs(save_directory)
 
+            display_keep_alive_input = input("Display keep-alive packets? (1 for yes, 0 for no): ") or '0'
+            display_keep_alive = display_keep_alive_input == '1'
+
             stop_event = threading.Event()
             lost_connection_event = threading.Event()
+
+            acknowledged_sequences = set()
+            ack_condition = threading.Condition()
 
             client_address = handle_handshake_server(server_sock)
             if client_address:
                 keep_alive_thread = threading.Thread(
                     target=keep_alive,
-                    args=(server_sock, client_address, stop_event, lost_connection_event),
+                    args=(server_sock, client_address, stop_event, lost_connection_event, display_keep_alive),
                     daemon=True
                 )
                 keep_alive_thread.start()
 
                 recv_thread = threading.Thread(
                     target=receive_messages,
-                    args=(server_sock, stop_event, lost_connection_event, client_address, save_directory),
+                    args=(server_sock, stop_event, lost_connection_event, client_address, save_directory, display_keep_alive, acknowledged_sequences, ack_condition),
                     daemon=True
                 )
                 recv_thread.start()
 
                 send_thread = threading.Thread(
                     target=send_messages,
-                    args=(server_sock, client_address, stop_event),
+                    args=(server_sock, client_address, stop_event, acknowledged_sequences, ack_condition),
                     daemon=True
                 )
                 send_thread.start()
@@ -260,30 +283,36 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
             save_directory = input("Enter directory to save received files (default '.'): ") or '.'
             if not os.path.exists(save_directory):
                 os.makedirs(save_directory)
-            print(save_directory)
 
-            server_address = (server_host, server_port)
+            display_keep_alive_input = input("Display keep-alive packets? (1 for yes, 0 for no): ") or '0'
+            display_keep_alive = display_keep_alive_input == '1'
+
             stop_event = threading.Event()
             lost_connection_event = threading.Event()
+
+            acknowledged_sequences = set()
+            ack_condition = threading.Condition()
+
+            server_address = (server_host, server_port)
 
             if handle_handshake_client(client_sock, server_address):
                 keep_alive_thread = threading.Thread(
                     target=keep_alive,
-                    args=(client_sock, server_address, stop_event, lost_connection_event),
+                    args=(client_sock, server_address, stop_event, lost_connection_event, display_keep_alive),
                     daemon=True
                 )
                 keep_alive_thread.start()
 
                 recv_thread = threading.Thread(
                     target=receive_messages,
-                    args=(client_sock, stop_event, lost_connection_event, server_address, save_directory),
+                    args=(client_sock, stop_event, lost_connection_event, server_address, save_directory, display_keep_alive, acknowledged_sequences, ack_condition),
                     daemon=True
                 )
                 recv_thread.start()
 
                 send_thread = threading.Thread(
                     target=send_messages,
-                    args=(client_sock, server_address, stop_event),
+                    args=(client_sock, server_address, stop_event, acknowledged_sequences, ack_condition),
                     daemon=True
                 )
                 send_thread.start()
@@ -297,7 +326,7 @@ def start_client(local_host='localhost', local_port=65433, server_host='localhos
         except Exception as e:
             print(f"Client error: {e}")
 
-def send_messages(sock, addr, stop_event):
+def send_messages(sock, addr, stop_event, acknowledged_sequences, ack_condition):
     sequence_number = 0  # Initialize sequence number
     message_id_counter = 0  # Initialize message ID counter
 
@@ -306,7 +335,7 @@ def send_messages(sock, addr, stop_event):
             max_data_size_input = input("Enter the minimal fragmentation size (bytes): ")
             try:
                 MAX_DATA_SIZE = int(max_data_size_input)
-                if MAX_DATA_SIZE <= 0 or MAX_DATA_SIZE > 1024:
+                if MAX_DATA_SIZE <= 0 or MAX_DATA_SIZE > 144:
                     print("Fragmentation size must be a positive integer up to 1024 bytes.")
                     continue
             except ValueError:
@@ -341,6 +370,8 @@ def send_messages(sock, addr, stop_event):
                     # Construct sequence_number with message_id (upper 16 bits) and 0 for fragment_number
                     sequence_number = (message_id << 16) | 0
                     sock.sendto(create_message(MSG_FILE_INFO, sequence_number, data), addr)
+                    print(f"Sent file info for {file_name}")
+
                     # Now send the file data, fragmented
                     fragments = [file_data[i:i+MAX_DATA_SIZE] for i in range(0, total_size, MAX_DATA_SIZE)]
                     num_fragments = len(fragments)
@@ -356,9 +387,33 @@ def send_messages(sock, addr, stop_event):
                             break
                         # Construct sequence_number with message_id and fragment_number
                         sequence_number = (message_id << 16) | fragment_number
-                        sock.sendto(create_message(msg_type, sequence_number, fragment), addr)
-                    # Display info
-                    print(f"Sent file: Name={file_name}, Size={total_size} bytes, Fragments={num_fragments}")
+
+                        # Implement stop-and-wait ARQ
+                        max_retries = 5
+                        retry_count = 0
+                        while retry_count < max_retries:
+                            # Send the fragment
+                            sock.sendto(create_message(msg_type, sequence_number, fragment), addr)
+                            print(f"Sent fragment {fragment_number} (Sequence number {sequence_number})")
+
+                            # Wait for ACK
+                            with ack_condition:
+                                ack_received = ack_condition.wait_for(lambda: sequence_number in acknowledged_sequences, timeout=5)
+                                if ack_received:
+                                    print(f"ACK received for fragment {fragment_number} (Sequence number {sequence_number})")
+                                    acknowledged_sequences.remove(sequence_number)
+                                    break  # Proceed to next fragment
+                                else:
+                                    retry_count += 1
+                                    print(f"Timeout waiting for ACK for fragment {fragment_number}, retransmitting (Attempt {retry_count}/5)")
+                        else:
+                            # Retries exhausted
+                            print(f"Failed to receive ACK for fragment {fragment_number} after {max_retries} attempts")
+                            stop_event.set()
+                            break
+                    else:
+                        # Display info
+                        print(f"Sent file: Name={file_name}, Size={total_size} bytes, Fragments={num_fragments}")
                 except Exception as e:
                     print(f"Failed to send file: {e}")
             else:
@@ -390,9 +445,33 @@ def send_messages(sock, addr, stop_event):
                             break
                         # Construct sequence_number with message_id and fragment_number
                         sequence_number = (message_id << 16) | fragment_number
-                        sock.sendto(create_message(msg_type, sequence_number, fragment), addr)
-                    # Display info
-                    print(f"Sent message: Name=message, Size={total_size} bytes, Fragments={num_fragments}")
+
+                        # Implement stop-and-wait ARQ
+                        max_retries = 5
+                        retry_count = 0
+                        while retry_count < max_retries:
+                            # Send the fragment
+                            sock.sendto(create_message(msg_type, sequence_number, fragment), addr)
+                            print(f"Sent fragment {fragment_number} (Sequence number {sequence_number})")
+
+                            # Wait for ACK
+                            with ack_condition:
+                                ack_received = ack_condition.wait_for(lambda: sequence_number in acknowledged_sequences, timeout=5)
+                                if ack_received:
+                                    print(f"ACK received for fragment {fragment_number} (Sequence number {sequence_number})")
+                                    acknowledged_sequences.remove(sequence_number)
+                                    break  # Proceed to next fragment
+                                else:
+                                    retry_count += 1
+                                    print(f"Timeout waiting for ACK for fragment {fragment_number}, retransmitting (Attempt {retry_count}/5)")
+                        else:
+                            # Retries exhausted
+                            print(f"Failed to receive ACK for fragment {fragment_number} after {max_retries} attempts")
+                            stop_event.set()
+                            break
+                    else:
+                        # Display info
+                        print(f"Sent message: Name=message, Size={total_size} bytes, Fragments={num_fragments}")
         except Exception as e:
             print(f"Sending error: {e}")
             stop_event.set()
