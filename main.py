@@ -24,7 +24,7 @@ def create_message(msg_type, sequence_number, data=b''):
     sequence_bytes = sequence_number.to_bytes(4, 'big')
     return bytes([msg_type]) + sequence_bytes + crc_bytes + data
 
-def parse_message_with_sequence(message):
+def parse_message(message):
     msg_type = message[0]
     sequence_number = int.from_bytes(message[1:5], 'big')
     received_crc = int.from_bytes(message[5:9], 'big')
@@ -51,7 +51,7 @@ def receive_messages(sock, stop_event, lost_connection_event, addr, save_directo
             sock.settimeout(interval)
             data, _ = sock.recvfrom(buffer_size)
             if data:
-                msg_type, msg_data, sequence_number, crc_matched = parse_message_with_sequence(data)
+                msg_type, msg_data, sequence_number, crc_matched = parse_message(data)
                 if not crc_matched:
                     nack_message = create_message(MSG_FRAGMENT_NAK, sequence_number)
                     sock.sendto(nack_message, addr)
@@ -202,11 +202,11 @@ def receive_messages(sock, stop_event, lost_connection_event, addr, save_directo
 
 def handle_handshake_server(server_sock):
     data, addr = server_sock.recvfrom(1024)
-    msg_type, _, _, _ = parse_message_with_sequence(data)
+    msg_type, _, _, _ = parse_message(data)
     if msg_type == MSG_SYN:
         server_sock.sendto(create_message(MSG_SYN_ACK, 0), addr)
         data, addr = server_sock.recvfrom(1024)
-        msg_type, _, _, _ = parse_message_with_sequence(data)
+        msg_type, _, _, _ = parse_message(data)
         if msg_type == MSG_ACK:
             print(f"\nHandshake complete with client at {addr}\n{'=' * 50}\n")
             return addr
@@ -219,7 +219,7 @@ def handle_handshake_client(client_sock, server_address, max_retries=3, timeout=
         try:
             client_sock.sendto(create_message(MSG_SYN, 0), server_address)
             data, _ = client_sock.recvfrom(1024)
-            msg_type, _, _, _ = parse_message_with_sequence(data)
+            msg_type, _, _, _ = parse_message(data)
             if msg_type == MSG_SYN_ACK:
                 client_sock.sendto(create_message(MSG_ACK, 0), server_address)
                 print(f"\nHandshake complete with server.\n{'=' * 50}\n")
